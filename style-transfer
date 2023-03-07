@@ -1,0 +1,267 @@
+#!/usr/bin/env python
+
+from keras.applications import VGG19
+
+model = VGG19(weights='imagenet')
+
+# Define the content and style layers: You will
+# need to define which layers of the pre-trained
+# VGG19 model you want to use for the content and
+# style images. The content layer will be the
+# layer that captures the content of the input
+# image, while the style layers will capture the
+# style of the input image. You can define these
+# layers as follows:
+
+# Define the content layer
+content_layers = ['block5_conv2']
+
+# Define the style layers
+style_layers = ['block1_conv1',
+                'block2_conv1',
+                'block3_conv1',
+                'block4_conv1',
+                'block5_conv1']
+
+# Load the input images: You will need to load the
+# content and style images that you want to
+# use. You can use the Image module from the PIL
+# (Python Imaging Library) to load the images:
+
+from PIL import Image
+
+# Load the content image
+content_image = Image.open('monkeyboat.png')
+
+# Load the style image
+style_image = Image.open('pianocat.png')
+
+# Preprocess the input images: Before passing the
+# input images through the VGG19 model, you will
+# need to preprocess them by resizing them to the
+# correct dimensions and normalizing the pixel
+# values:
+
+import numpy as np
+from keras.preprocessing.image import img_to_array, load_img
+
+# Define the target image dimensions
+target_height = 512
+target_width = 512
+
+# Preprocess the content image
+content_image = load_img('monkeyboat.png', target_size=(target_height, target_width))
+content_array = img_to_array(content_image)
+content_array = np.expand_dims(content_array, axis=0)
+content_array = preprocess_input(content_array)
+
+# Preprocess the style image
+style_image = load_img('pianocat.png', target_size=(target_height, target_width))
+style_array = img_to_array(style_image)
+style_array = np.expand_dims(style_array, axis=0)
+style_array = preprocess_input(style_array)
+
+# Extract the features: You will need to extract
+# the features from the content and style images
+# by passing them through the VGG19 model and
+# getting the outputs of the content and style
+# layers:
+
+from keras.models import Model
+
+# Define the content and style models
+content_model = Model(inputs=model.input, outputs=model.get_layer(content_layers).output)
+style_models = [Model(inputs=model.input, outputs=model.get_layer(layer).output) for layer in style_layers]
+
+# Extract the content features
+content_features = content_model.predict(content_array)
+
+# Extract the style features
+style_features = [model.predict(style_array) for model in style_models]
+
+# Define the loss function: You will need to
+# define the loss function that will be used
+
+# to train the neural network to combine the style
+# and content features. The loss function will
+# compare the output of the input image with the
+# output of the target image and compute the
+# difference between them. The loss function will
+# consist of two parts: the content loss, which
+# measures how closely the content of the input
+# image matches the content of the target image,
+# and the style loss, which measures how closely
+# the style of the input image matches the style
+# of the target image. You can define the loss
+# function as follows:
+
+def content_loss(content, target):
+    return tf.reduce_mean(tf.square(content - target))
+
+def style_loss(style, target):
+    S = gram_matrix(style)
+    C = gram_matrix(target)
+    channels = int(style.shape[-1])
+    size = target_height * target_width
+    return tf.reduce_mean(tf.square(S - C)) / (4. * (channels ** 2) * (size ** 2))
+
+def total_variation_loss(x):
+    a = tf.square(x[:, :target_height-1, :target_width-1, :] - x[:, 1:, :target_width-1, :])
+    b = tf.square(x[:, :target_height-1, :target_width-1, :] - x[:, :target_height-1, 1:, :])
+    return tf.reduce_sum(tf.pow(a + b, 1.25))
+
+def loss_fn(model, loss_weights, init_image, content_features, style_features):
+    style_weight, content_weight, tv_weight = loss_weights
+
+    # Create an empty dictionary to hold the losses
+    losses = {}
+
+    # Get the output of the model for the input image
+    outputs = model(init_image)
+
+    # Extract the content and style features from the output
+    content_output = outputs[0]
+    style_outputs = outputs[1:]
+
+    # Compute the content loss
+    content_loss_val = content_loss(content_features, content_output)
+    losses['content'] = content_weight * content_loss_val
+
+    # Compute the style loss
+    style_loss_val = 0
+    for i, style_output in enumerate(style_outputs):
+        style_loss_val += style_loss(style_features[i], style_output)
+    losses['style'] = style_weight * style_loss_val
+
+    # Compute the total variation loss
+    tv_loss_val = total_variation_loss(init_image)
+    losses['tv'] = tv_weight * tv_loss_val
+
+    # Compute the total loss
+    total_loss = content_weight * content_loss_val + style_weight * style_loss_val + tv_weight * tv_loss_val
+    losses['total'] = total_loss
+
+    return total_loss, losses
+
+# Define the optimization function: You will need
+# to define the optimization function that will be
+# used to minimize the loss function and generate
+# the final output image. You can use the Adam
+# optimizer, which is a popular optimization
+# algorithm for deep learning. You can define the
+# optimization function as follows:
+
+import tensorflow as tf
+
+def clip_0_1(image):
+    return tf.clip_by_value(image, clip_value_min=0.0, clip_value_max=1.0)
+
+def get_optimizer():
+    return tf.optimizers.Adam(learning_rate=0.02, beta_1=0.99, epsilon=1e-1)
+
+# Train the neural network: You will need to train
+# the neural network by minimizing the loss
+# function and generating the final output
+# image. You can define a function that takes the
+# input image, the content and style features, and
+# the loss weights as inputs, and returns the
+# final output image:
+
+import time
+import matplotlib.pyplot as plt
+
+# This function takes a tensor as input, scales
+# the values between 0 and 255, converts it to
+# a NumPy array of unsigned 8-bit integers, and
+# then converts it to a PIL Image. It also handles
+# the case where the tensor has an extra dimension
+# for batch size.
+#
+def tensor_to_image(tensor):
+    tensor = tensor*255
+    tensor = np.array(tensor, dtype=np.uint8)
+    if np.ndim(tensor)>3:
+        assert tensor.shape[0] == 1
+        tensor = tensor[0]
+    return Image.fromarray(tensor)
+
+def train(model, content_image, style_image, epochs=10, steps_per_epoch=100, style_weight=1e-2, content_weight=1e4, tv_weight=1e-5):
+    # Extract the content and style features from the input images
+    content_features = get_feature_representations(content_image, model)
+    style_features = get_feature_representations(style_image, model)
+    loss_weights = (style_weight, content_weight, tv_weight)
+
+    # Initialize the input image with the content image
+    init_image = tf.Variable(content_image)
+
+    # Define the optimizer
+    opt = get_optimizer()
+
+    # Start the training loop
+    start_time = time.time()
+    best_loss, best_img = float('inf'), None
+    losses = []
+    for epoch in range(epochs):
+        epoch_losses = []
+        for step in range(steps_per_epoch):
+            # Compute the loss and gradients
+            total_loss, grads = loss_fn(model, loss_weights, init_image, content_features, style_features)
+            epoch_losses.append(total_loss)
+
+            # Update the input image
+            opt.apply_gradients([(grads, init_image)])
+            init_image.assign(clip_0_1(init_image))
+
+            # Update the best image so far
+            if total_loss < best_loss:
+                best_loss = total_loss
+                best_img = init_image.numpy()
+
+        # Print the progress
+        print('Epoch {}/{} ({}) - Loss: {:.4f}'.format(epoch+1, epochs, steps_per_epoch, np.mean(epoch_losses)))
+        losses.append(np.mean(epoch_losses))
+
+    # Print the total time
+    end_time = time.time()
+    print('Total time: {:.1f}s'.format(end_time-start_time))
+
+    # Plot the losses
+    plt.figure()
+    plt.plot(losses)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.show()
+
+    # Return the final output image
+    return tensor_to_image(best_img)
+
+# Run the program: You can run the program by
+# defining the input images, loading the
+# pre-trained VGG19 model, and calling the
+# `train()` function with the appropriate
+# arguments:
+
+import tensorflow as tf
+import numpy as np
+from PIL import Image
+
+# Define the input images
+content_image = Image.open('monkeyboat.png').resize((256, 256))
+style_image = Image.open('pianocat.png').resize((256, 256))
+
+# Load the pre-trained VGG19 model
+model = get_model()
+
+# Train the neural network
+output_image = train(model, np.array(content_image), np.array(style_image))
+output_image.save('output.png')
+
+# This program will load the content and style
+# images, extract their features using the
+# pre-trained VGG19 model, train the neural
+# network to combine the style and content
+# features, and generate the final output
+# image. The output image will be saved as a JPEG
+# file. You can adjust the hyperparameters, such
+# as the number of epochs, steps per epoch, and
+# loss weights, to obtain different results.
